@@ -21,14 +21,14 @@ logger = logging.getLogger(__name__)
 # --- Constants ---
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_FALLBACK_QUESTION = "Please elaborate on the main point of your submission."
-FREE_MODEL = "deepseek/deepseek-chat-v3-0324:free"  # Using explicitly free model
+FREE_MODEL = "mistralai/mistral-7b-instruct:free"  # Using a different free model
 
 async def generate_follow_up_question(submission_content: str, system_prompt: str) -> str:
     """
     Calls the OpenRouter API using direct HTTP requests to generate a contextual question.
 
     Args:
-        submission_content: The text of the student's original submission.
+        submission_content: The text of the student's submission.
         system_prompt: The system prompt fetched from the database.
 
     Returns:
@@ -42,7 +42,7 @@ async def generate_follow_up_question(submission_content: str, system_prompt: st
     headers = {
         "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://illia-shyn.github.io/ThoughtCaptcha-frontend/",
+        "HTTP-Referer": "https://illia-shyn.github.io/ThoughtCaptcha/",  # Updated URL
         "X-Title": "ThoughtCaptcha",
     }
 
@@ -57,6 +57,9 @@ async def generate_follow_up_question(submission_content: str, system_prompt: st
         "temperature": 0.7
     }
 
+    # Log the request we're about to send
+    logger.info(f"Sending request to OpenRouter with model: {FREE_MODEL}")
+    
     # Using asyncio.to_thread to run the requests call asynchronously
     try:
         # Run the HTTP request in a thread to not block the event loop
@@ -69,6 +72,8 @@ async def generate_follow_up_question(submission_content: str, system_prompt: st
         )
 
         # Process the response
+        logger.info(f"OpenRouter response status: {response.status_code}")
+        
         if response.status_code == 200:
             response_data = response.json()
             if response_data and "choices" in response_data and len(response_data["choices"]) > 0:
@@ -80,7 +85,12 @@ async def generate_follow_up_question(submission_content: str, system_prompt: st
             logger.warning("OpenRouter response did not contain the expected data structure.")
             return DEFAULT_FALLBACK_QUESTION
         else:
-            logger.error(f"OpenRouter API status error: {response.status_code} - {response}")
+            # Log more details about the error response
+            try:
+                error_details = response.json()
+                logger.error(f"OpenRouter API error: {response.status_code} - {error_details}")
+            except:
+                logger.error(f"OpenRouter API status error: {response.status_code} - {response.text}")
             return DEFAULT_FALLBACK_QUESTION
 
     except requests.exceptions.Timeout:
