@@ -1,86 +1,95 @@
 """
-Client for interacting with the OpenRouter API.
+Client for interacting with the OpenRouter API using the openai library.
 
 Handles sending requests to OpenRouter to generate follow-up questions
-based on student submissions. Includes fallback mechanisms.
+based on student submissions and the configured system prompt.
+Includes fallback mechanisms.
 """
 
-import httpx
 import logging
-from typing import Optional
+from openai import OpenAI, APITimeoutError, APIConnectionError, RateLimitError, APIStatusError
 
 from .config import get_settings
 
+# --- Settings and Logger ---
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
-OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-# Remember to set OPENROUTER_API_KEY in your .env file or environment variables
-API_KEY = settings.OPENROUTER_API_KEY
-
 # --- Constants ---
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_FALLBACK_QUESTION = "Please elaborate on the main point of your submission."
-DEFAULT_SYSTEM_PROMPT = ("You are an AI assistant helping to verify student understanding. "
-                         "Given the student's submission text, generate one concise follow-up question "
-                         "that probes their understanding or asks for clarification on a specific aspect. "
-                         "The question should be answerable in 60-90 seconds.")
-DEFAULT_MODEL = "openai/gpt-3.5-turbo" # A common default, adjust as needed
+DEFAULT_MODEL = "openai/gpt-3.5-turbo" # Default model if not specified elsewhere
 
-async def generate_follow_up_question(submission_content: str) -> str:
+# --- OpenAI Client Initialization ---
+# The API key is read from the environment variable via settings
+# DO NOT HARDCODE THE API KEY HERE
+if settings.OPENROUTER_API_KEY:
+    client = OpenAI(
+        base_url=OPENROUTER_BASE_URL,
+        api_key=settings.OPENROUTER_API_KEY,
+    )
+    logger.info("OpenAI client initialized for OpenRouter.")
+else:
+    client = None # Client is not initialized if key is missing
+    logger.warning("OPENROUTER_API_KEY not set. OpenRouter client not initialized.")
+
+async def generate_follow_up_question(submission_content: str, system_prompt: str) -> str:
     """
-    Calls the OpenRouter API to generate a contextual follow-up question.
+    Calls the OpenRouter API using the openai library to generate a contextual question.
 
     Args:
         submission_content: The text of the student's original submission.
+        system_prompt: The system prompt fetched from the database.
 
     Returns:
-        The generated question as a string, or a fallback question if the API call fails.
+        The generated question as a string, or a fallback question if the API call fails
+        or the client is not initialized.
     """
-    if not API_KEY:
-        logger.warning("OPENROUTER_API_KEY is not set. Returning fallback question.")
+    if not client:
+        logger.warning("OpenRouter client not available (API key likely missing). Returning fallback question.")
         return DEFAULT_FALLBACK_QUESTION
 
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json",
-        # Optional: Add HTTP Referer or X-Title headers if recommended by OpenRouter
-        # "HTTP-Referer": settings.YOUR_SITE_URL, # Replace with your actual site URL
-        # "X-Title": "ThoughtCaptcha", # Replace with your app name
-    }
-
-    payload = {
-        "model": DEFAULT_MODEL, # Specify the model you want to use
-        "messages": [
-            {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
-            {"role": "user", "content": f"Student Submission:\n```\n{submission_content}\n```\nGenerate a follow-up question:"}
-        ],
-        "max_tokens": 50, # Limit response length
-        "temperature": 0.7, # Adjust creativity vs. predictability
+    # Define optional headers (replace placeholders if needed)
+    # You might want to make YOUR_SITE_URL and YOUR_SITE_NAME configurable via settings
+    http_headers = {
+        "HTTP-Referer": "https://illia-shyn.github.io/ThoughtCaptcha-frontend/", # Example placeholder
+        "X-Title": "ThoughtCaptcha",              # Example placeholder
     }
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client: # Increased timeout for AI generation
-            response = await client.post(OPENROUTER_API_URL, headers=headers, json=payload)
-            response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+        logger.debug(f"Sending request to OpenRouter model: {DEFAULT_MODEL}")
+        completion = await client.chat.completions.create(
+            extra_headers=http_headers,
+            model=DEFAULT_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Student Submission:\n```\n{submission_content}\n```\nGenerate a follow-up question:"}
+            ],
+            max_tokens=70, # Adjusted max tokens slightly
+            temperature=0.7,
+            timeout=30.0 # Timeout for the request
+        )
 
-            result = response.json()
-            if result.get("choices") and len(result["choices"]) > 0:
-                generated_question = result["choices"][0].get("message", {}).get("content", "").strip()
-                if generated_question:
-                    logger.info(f"Successfully generated question for submission snippet: {submission_content[:50]}...")
-                    return generated_question
-                else:
-                    logger.warning("OpenRouter response format unexpected or empty message content.")
-            else:
-                logger.warning(f"OpenRouter response did not contain expected choices: {result}")
+        generated_question = completion.choices[0].message.content.strip()
 
-    except httpx.RequestError as e:
-        logger.error(f"HTTP Request Error calling OpenRouter: {e}")
-    except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP Status Error calling OpenRouter: {e.response.status_code} - {e.response.text}")
+        if generated_question:
+            logger.info(f"Successfully generated question for submission snippet: {submission_content[:50]}...")
+            return generated_question
+        else:
+            logger.warning("OpenRouter response contained an empty message content.")
+            return DEFAULT_FALLBACK_QUESTION
+
+    except APITimeoutError:
+        logger.error("OpenRouter API request timed out.")
+    except APIConnectionError as e:
+        logger.error(f"OpenRouter API connection error: {e}")
+    except RateLimitError:
+        logger.error("OpenRouter API rate limit exceeded.")
+    except APIStatusError as e:
+        logger.error(f"OpenRouter API status error: {e.status_code} - {e.response}")
     except Exception as e:
         logger.error(f"An unexpected error occurred calling OpenRouter: {e}", exc_info=True)
 
-    # If any error occurred or the response was invalid, return the fallback
+    # If any error occurred, return the fallback
     logger.warning("Returning fallback question due to API error or invalid response.")
     return DEFAULT_FALLBACK_QUESTION 

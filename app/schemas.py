@@ -27,6 +27,20 @@ class ResponseVerify(BaseModel):
     submission_id: int = Field(..., description="The ID of the submission this response belongs to.")
     student_response: str = Field(..., description="The student's answer to the follow-up question.")
 
+# --- Prompt Schemas ---
+class PromptBase(BaseModel):
+    prompt_text: str
+
+class PromptUpdate(PromptBase):
+    pass
+
+class PromptRead(PromptBase):
+    id: int = 1 # Usually fixed at 1
+    # updated_at: Optional[datetime.datetime] = None
+
+    class Config:
+        from_attributes = True
+
 # --- Response Schemas ---
 class Submission(SubmissionBase):
     """Schema for representing a Submission record in API responses."""
@@ -38,6 +52,10 @@ class Submission(SubmissionBase):
 
     class Config:
         from_attributes = True # Renamed from orm_mode in Pydantic v2
+
+class SubmissionFullData(Submission):
+    """Schema for retrieving full submission data for teacher view."""
+    pass # Inherits all fields from Submission response schema
 
 class QuestionGeneratedResponse(BaseModel):
     """Response schema after successfully generating a question."""

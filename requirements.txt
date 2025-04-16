@@ -16,6 +16,7 @@ pydantic-settings # For loading settings from env vars
 
 # HTTP client for OpenRouter API calls
 httpx
+openai # Add openai library for the new client structure
 
 # CORS middleware
 fastapi[all] # Includes python-multipart and other useful extras

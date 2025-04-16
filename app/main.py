@@ -10,6 +10,7 @@ import logging
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import List
 
 from . import crud, models, schemas, openrouter_client
 from .database import engine, get_db, init_db
@@ -86,6 +87,17 @@ async def submit_assignment(
     logger.info(f"Submission created with ID: {db_submission.id}")
     return db_submission
 
+@app.get("/api/submissions", response_model=List[schemas.SubmissionFullData], tags=["Submissions"])
+async def read_submissions(
+    skip: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db)
+):
+    """Retrieve all submission records (for teacher view)."""
+    logger.info(f"Fetching submissions with skip={skip}, limit={limit}")
+    submissions = await crud.get_all_submissions(db, skip=skip, limit=limit)
+    return submissions
+
 @app.post("/api/generate-question", response_model=schemas.QuestionGeneratedResponse, tags=["Verification"])
 async def generate_question(
     request_data: schemas.QuestionGenerate,
@@ -93,7 +105,7 @@ async def generate_question(
 ):
     """
     Generates a follow-up question for a given submission ID.
-    Fetches the submission, calls OpenRouter, and stores the question.
+    Fetches the submission, gets the current system prompt, calls OpenRouter, and stores the question.
     """
     submission_id = request_data.submission_id
     logger.info(f"Generating question for submission ID: {submission_id}")
@@ -110,8 +122,16 @@ async def generate_question(
             generated_question=db_submission.generated_question
         )
 
-    # Generate question using OpenRouter client
-    generated_question = await openrouter_client.generate_follow_up_question(db_submission.original_content)
+    # Fetch the current system prompt
+    system_prompt_obj = await crud.get_system_prompt(db)
+    system_prompt = system_prompt_obj.prompt_text
+    logger.info("Using current system prompt for question generation.")
+
+    # Generate question using OpenRouter client, passing the system prompt
+    generated_question = await openrouter_client.generate_follow_up_question(
+        submission_content=db_submission.original_content,
+        system_prompt=system_prompt
+    )
 
     # Update the submission record with the generated question
     updated_submission = await crud.update_submission_question(
@@ -157,6 +177,25 @@ async def verify_response(
 
     logger.info(f"Successfully stored response for submission ID: {submission_id}")
     return schemas.ResponseVerifiedResponse(submission_id=submission_id)
+
+# --- Prompt Management Endpoints ---
+@app.get("/api/prompt", response_model=schemas.PromptRead, tags=["Prompt Management"])
+async def read_system_prompt(db: AsyncSession = Depends(get_db)):
+    """Retrieve the current system prompt."""
+    logger.info("Fetching current system prompt.")
+    prompt = await crud.get_system_prompt(db)
+    return prompt
+
+@app.put("/api/prompt", response_model=schemas.PromptRead, tags=["Prompt Management"])
+async def update_system_prompt(
+    prompt_data: schemas.PromptUpdate,
+    db: AsyncSession = Depends(get_db)
+):
+    """Update the system prompt."""
+    logger.info(f"Updating system prompt to: {prompt_data.prompt_text[:50]}...")
+    updated_prompt = await crud.update_system_prompt(db=db, prompt_update=prompt_data)
+    logger.info("System prompt updated successfully.")
+    return updated_prompt
 
 # Example of how to include routers from other files if the app grows:
 # from .routers import items, users

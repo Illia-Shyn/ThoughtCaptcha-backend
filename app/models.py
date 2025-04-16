@@ -11,6 +11,12 @@ from sqlalchemy.orm import relationship
 
 from .database import Base
 
+# --- Constants for default prompt ---
+DEFAULT_SYSTEM_PROMPT = ("You are an AI assistant helping to verify student understanding. "
+                         "Given the student's submission text, generate one concise follow-up question "
+                         "that probes their understanding or asks for clarification on a specific aspect. "
+                         "The question should be answerable in 60-90 seconds.")
+
 class Submission(Base):
     """
     Represents an individual submission cycle, linking the original
@@ -32,6 +38,17 @@ class Submission(Base):
     # We could add relationships to User or Assignment models later if needed
     # user_id = Column(Integer, ForeignKey("users.id"))
     # user = relationship("User")
+
+class SystemPrompt(Base):
+    """
+    Stores the system prompt used for generating follow-up questions.
+    Uses a fixed ID (1) to ensure only one row exists.
+    """
+    __tablename__ = "system_prompts"
+
+    id = Column(Integer, primary_key=True, default=1)
+    prompt_text = Column(Text, nullable=False, default=DEFAULT_SYSTEM_PROMPT)
+    # updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
 # Example of how other models could be added:
 # class User(Base):
