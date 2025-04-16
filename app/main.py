@@ -54,8 +54,8 @@ async def on_startup():
     """Actions to perform on application startup."""
     logger.info("Starting up ThoughtCaptcha API...")
     # Initialize database tables (consider Alembic for production)
-    # await init_db()
-    # logger.info("Database tables initialized (if they didn't exist).")
+    await init_db()
+    logger.info("Database tables initialized (if they didn't exist).")
     pass # Add any other startup logic here
 
 @app.on_event("shutdown")
