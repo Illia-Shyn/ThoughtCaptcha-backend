@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 
 from . import crud, models, schemas, openrouter_client
-from .database import engine, get_db, init_db
+from .database import engine, get_db, init_db, AsyncSessionLocal
 from .config import get_settings
 
 # --- Logging Setup ---
@@ -54,10 +54,22 @@ app.add_middleware(
 async def on_startup():
     """Actions to perform on application startup."""
     logger.info("Starting up ThoughtCaptcha API...")
-    # Initialize database tables (consider Alembic for production)
+    # 1. Initialize database tables
     await init_db()
-    logger.info("Database tables initialized (if they didn't exist).")
-    pass # Add any other startup logic here
+    logger.info("Database tables created/verified.")
+
+    # 2. Ensure default system prompt exists (run *after* init_db)
+    logger.info("Ensuring default system prompt exists...")
+    async with AsyncSessionLocal() as session:
+        try:
+            await crud.get_system_prompt(session) # Call this to create if not exists
+            await session.commit()
+            logger.info("Default system prompt check complete.")
+        except Exception as e:
+            await session.rollback()
+            logger.error(f"Error ensuring system prompt exists: {e}", exc_info=True)
+            # Decide if you want the app to fail startup here or continue
+            # raise e # Uncomment to make startup fail on prompt error
 
 @app.on_event("shutdown")
 async def on_shutdown():

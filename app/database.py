@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 from .config import get_settings
-from . import crud
 
 settings = get_settings()
 
@@ -63,8 +62,4 @@ async def init_db():
     async with engine.begin() as conn:
         # In a real app, avoid dropping tables like this
         # await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
-        # Ensure the default prompt row exists after creating tables
-        async with AsyncSessionLocal() as session:
-            await crud.get_system_prompt(session) # Call this to create if not exists
-            await session.commit() 
+        await conn.run_sync(Base.metadata.create_all) 
