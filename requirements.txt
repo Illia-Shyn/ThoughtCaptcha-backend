@@ -1,0 +1,24 @@
+# Core framework
+fastapi
+# Server (required by fastapi)
+uvicorn[standard]
+
+# Database ORM and driver
+sqlalchemy[asyncio]
+asyncpg # PostgreSQL async driver
+
+# Environment variable management
+python-dotenv
+
+# Pydantic (used by FastAPI for data validation)
+pydantic
+pydantic-settings # For loading settings from env vars
+
+# HTTP client for OpenRouter API calls
+httpx
+
+# CORS middleware
+fastapi[all] # Includes python-multipart and other useful extras
+
+# For database migrations (optional but recommended)
+# alembic 
