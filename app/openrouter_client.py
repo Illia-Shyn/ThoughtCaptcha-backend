@@ -21,14 +21,15 @@ logger = logging.getLogger(__name__)
 # --- Constants ---
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_FALLBACK_QUESTION = "Please elaborate on the main point of your submission."
-FREE_MODEL = "mistralai/mistral-7b-instruct:free"  # Using a different free model
+FREE_MODEL = "mistralai/mistral-7b-instruct:free"  
 
-async def generate_follow_up_question(submission_content: str, system_prompt: str) -> str:
+async def generate_follow_up_question(assignment_prompt: str, student_response: str, system_prompt: str) -> str:
     """
     Calls the OpenRouter API using direct HTTP requests to generate a contextual question.
 
     Args:
-        submission_content: The text of the student's submission.
+        assignment_prompt: The text of the assignment question/prompt.
+        student_response: The text of the student's response to the assignment.
         system_prompt: The system prompt fetched from the database.
 
     Returns:
@@ -46,12 +47,12 @@ async def generate_follow_up_question(submission_content: str, system_prompt: st
         "X-Title": "ThoughtCaptcha",
     }
 
-    # Create request payload
+    # Create request payload with both assignment prompt and student response
     payload = {
         "model": FREE_MODEL,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Student Submission:\n```\n{submission_content}\n```\nGenerate a follow-up question:"}
+            {"role": "user", "content": f"Assignment Question:\n```\n{assignment_prompt}\n```\n\nStudent's Response:\n```\n{student_response}\n```\n\nGenerate a concise follow-up question based on the student's response in the context of the assignment question:"}
         ],
         "max_tokens": 70,
         "temperature": 0.7
@@ -79,7 +80,7 @@ async def generate_follow_up_question(submission_content: str, system_prompt: st
             if response_data and "choices" in response_data and len(response_data["choices"]) > 0:
                 generated_question = response_data["choices"][0]["message"]["content"].strip()
                 if generated_question:
-                    logger.info(f"Successfully generated question for submission snippet: {submission_content[:50]}...")
+                    logger.info(f"Successfully generated question based on assignment and student response")
                     return generated_question
 
             logger.warning("OpenRouter response did not contain the expected data structure.")

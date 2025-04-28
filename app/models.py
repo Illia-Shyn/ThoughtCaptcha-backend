@@ -6,16 +6,33 @@ assignment submissions, generated questions, and student responses.
 """
 
 import datetime
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, func
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, func, Boolean
 from sqlalchemy.orm import relationship
 
 from .database import Base
 
 # --- Constants for default prompt ---
 DEFAULT_SYSTEM_PROMPT = ("You are an AI assistant helping to verify student understanding. "
-                         "Given the student's submission text, generate one concise follow-up question "
-                         "that probes their understanding or asks for clarification on a specific aspect. "
-                         "The question should be answerable in 60-90 seconds.")
+                         "You will receive the original assignment question and the student's response to it. "
+                         "Based on BOTH the question and the response, generate ONE concise follow-up question "
+                         "that probes the student's understanding of their response *in relation to the assignment*, or asks for clarification on a specific aspect connecting the two. "
+                         "The follow-up question should be answerable in 60-90 seconds.")
+
+class Assignment(Base):
+    """
+    Represents an assignment prompt set by the teacher.
+    Only one assignment can be marked as current.
+    """
+    __tablename__ = "assignments"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    prompt_text = Column(Text, nullable=False)
+    is_current = Column(Boolean, default=False, index=True) # Flag for the currently active assignment
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+    
+    # Relationship to submissions
+    submissions = relationship("Submission", back_populates="assignment")
 
 class Submission(Base):
     """
@@ -34,6 +51,10 @@ class Submission(Base):
     # authenticity_score = Column(Float, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Link to the assignment
+    assignment_id = Column(Integer, ForeignKey("assignments.id"), nullable=True)
+    assignment = relationship("Assignment", back_populates="submissions")
 
     # We could add relationships to User or Assignment models later if needed
     # user_id = Column(Integer, ForeignKey("users.id"))

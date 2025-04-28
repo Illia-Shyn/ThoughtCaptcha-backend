@@ -85,6 +85,78 @@ async def health_check():
     """Simple health check endpoint."""
     return schemas.HealthCheckResponse(status="OK")
 
+# --- Assignment Endpoints ---
+
+@app.post("/api/assignments", response_model=schemas.AssignmentRead, status_code=status.HTTP_201_CREATED, tags=["Assignments"])
+async def create_assignment(
+    assignment: schemas.AssignmentCreate,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Creates a new assignment prompt.
+    Returns the created assignment record including its ID.
+    """
+    logger.info(f"Creating new assignment: {assignment.prompt_text[:50]}...")
+    db_assignment = await crud.create_assignment(db=db, assignment=assignment)
+    logger.info(f"Assignment created with ID: {db_assignment.id}")
+    return db_assignment
+
+@app.get("/api/assignments", response_model=List[schemas.AssignmentRead], tags=["Assignments"])
+async def read_assignments(
+    skip: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db)
+):
+    """Retrieve all assignment records."""
+    logger.info(f"Fetching assignments with skip={skip}, limit={limit}")
+    assignments = await crud.get_assignments(db, skip=skip, limit=limit)
+    return assignments
+
+@app.get("/api/assignments/current", response_model=schemas.AssignmentRead, tags=["Assignments"])
+async def read_current_assignment(
+    db: AsyncSession = Depends(get_db)
+):
+    """Retrieve the currently active assignment."""
+    logger.info("Fetching current assignment")
+    assignment = await crud.get_current_assignment(db)
+    if not assignment:
+        logger.warning("No current assignment found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No current assignment found")
+    return assignment
+
+@app.put("/api/assignments/{assignment_id}", response_model=schemas.AssignmentRead, tags=["Assignments"])
+async def update_assignment(
+    assignment_id: int,
+    assignment_update: schemas.AssignmentUpdate,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Update an existing assignment's details.
+    """
+    logger.info(f"Updating assignment with ID: {assignment_id}")
+    db_assignment = await crud.update_assignment(db=db, assignment_id=assignment_id, assignment_update=assignment_update)
+    if not db_assignment:
+        logger.warning(f"Assignment ID {assignment_id} not found for update.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
+    return db_assignment
+
+@app.put("/api/assignments/{assignment_id}/set-current", response_model=schemas.AssignmentRead, tags=["Assignments"])
+async def set_current_assignment(
+    assignment_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Set an assignment as the current active one and make all others not current.
+    """
+    logger.info(f"Setting assignment ID {assignment_id} as current")
+    db_assignment = await crud.set_current_assignment(db=db, assignment_id=assignment_id)
+    if not db_assignment:
+        logger.warning(f"Assignment ID {assignment_id} not found when trying to set as current.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
+    return db_assignment
+
+# --- Submission Endpoints ---
+
 @app.post("/api/submit-assignment", response_model=schemas.Submission, status_code=status.HTTP_201_CREATED, tags=["Submissions"])
 async def submit_assignment(
     submission: schemas.SubmissionCreate,
@@ -93,8 +165,17 @@ async def submit_assignment(
     """
     Receives the initial student submission and stores it.
     Returns the created submission record including its ID.
+    Can be linked to an assignment via assignment_id.
     """
     logger.info(f"Received new submission: {submission.original_content[:50]}...")
+    
+    # If no assignment_id is provided, try to use current assignment
+    if submission.assignment_id is None:
+        current_assignment = await crud.get_current_assignment(db)
+        if current_assignment:
+            submission.assignment_id = current_assignment.id
+            logger.info(f"Using current assignment ID: {submission.assignment_id} for submission")
+    
     db_submission = await crud.create_submission(db=db, submission=submission)
     logger.info(f"Submission created with ID: {db_submission.id}")
     return db_submission
@@ -117,7 +198,7 @@ async def generate_question(
 ):
     """
     Generates a follow-up question for a given submission ID.
-    Fetches the submission, gets the current system prompt, calls OpenRouter, and stores the question.
+    Uses both the assignment prompt and student response for context.
     """
     submission_id = request_data.submission_id
     logger.info(f"Generating question for submission ID: {submission_id}")
@@ -134,14 +215,23 @@ async def generate_question(
             generated_question=db_submission.generated_question
         )
 
+    # Get the assignment prompt
+    assignment_prompt = "No specific assignment prompt provided."
+    if db_submission.assignment:
+        assignment_prompt = db_submission.assignment.prompt_text
+    
+    # Get the student's response
+    student_response = db_submission.original_content
+
     # Fetch the current system prompt
     system_prompt_obj = await crud.get_system_prompt(db)
     system_prompt = system_prompt_obj.prompt_text
     logger.info("Using current system prompt for question generation.")
 
-    # Generate question using OpenRouter client, passing the system prompt
+    # Generate question using OpenRouter client, passing assignment, response and system prompt
     generated_question = await openrouter_client.generate_follow_up_question(
-        submission_content=db_submission.original_content,
+        assignment_prompt=assignment_prompt,
+        student_response=student_response,
         system_prompt=system_prompt
     )
 
@@ -203,8 +293,8 @@ async def update_system_prompt(
     prompt_data: schemas.PromptUpdate,
     db: AsyncSession = Depends(get_db)
 ):
-    """Update the system prompt."""
-    logger.info(f"Updating system prompt to: {prompt_data.prompt_text[:50]}...")
+    """Update the system prompt used for generating follow-up questions."""
+    logger.info(f"Updating system prompt: {prompt_data.prompt_text[:50]}...")
     updated_prompt = await crud.update_system_prompt(db=db, prompt_update=prompt_data)
     logger.info("System prompt updated successfully.")
     return updated_prompt
