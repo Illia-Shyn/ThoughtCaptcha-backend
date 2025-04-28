@@ -9,6 +9,30 @@ import datetime
 from pydantic import BaseModel, Field
 from typing import Optional
 
+# --- Assignment Schemas ---
+class AssignmentBase(BaseModel):
+    """Base schema for assignment data."""
+    prompt_text: str = Field(..., description="The text of the assignment question/prompt.")
+    is_current: Optional[bool] = False
+
+class AssignmentCreate(AssignmentBase):
+    """Schema for creating a new assignment record."""
+    pass
+
+class AssignmentUpdate(BaseModel):
+    """Schema for updating an assignment record (allows partial updates)."""
+    prompt_text: Optional[str] = None
+    is_current: Optional[bool] = None
+
+class AssignmentRead(AssignmentBase):
+    """Schema for representing an Assignment record in API responses."""
+    id: int
+    created_at: datetime.datetime
+    updated_at: Optional[datetime.datetime] = None
+
+    class Config:
+        from_attributes = True
+
 # --- Base Schemas ---
 class SubmissionBase(BaseModel):
     """Base schema for submission data, used for creation."""
@@ -16,7 +40,7 @@ class SubmissionBase(BaseModel):
 
 class SubmissionCreate(SubmissionBase):
     """Schema for creating a new submission record."""
-    pass # Inherits original_content
+    assignment_id: Optional[int] = None
 
 class QuestionGenerate(BaseModel):
     """Schema for the request to generate a follow-up question."""
@@ -47,6 +71,7 @@ class Submission(SubmissionBase):
     id: int
     generated_question: Optional[str] = None
     student_response: Optional[str] = None
+    assignment_id: Optional[int] = None
     created_at: datetime.datetime
     updated_at: Optional[datetime.datetime] = None
 
@@ -55,7 +80,10 @@ class Submission(SubmissionBase):
 
 class SubmissionFullData(Submission):
     """Schema for retrieving full submission data for teacher view."""
-    pass # Inherits all fields from Submission response schema
+    assignment: Optional[AssignmentRead] = None
+    
+    class Config:
+        from_attributes = True
 
 class QuestionGeneratedResponse(BaseModel):
     """Response schema after successfully generating a question."""

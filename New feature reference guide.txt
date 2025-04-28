@@ -1,0 +1,216 @@
+New feature reference guide.
+# ThoughtCaptcha Backend Enhancement: Assignment Prompt Integration
+
+**Goal:** Modify the backend to support creating and storing assignment prompts set by the teacher. Associate student submissions with the active assignment prompt. Pass both the assignment prompt and student response to the LLM for question generation.
+
+**Context:** I have a FastAPI backend (`app/`) with SQLAlchemy models (`models.py`), Pydantic schemas (`schemas.py`), CRUD operations (`crud.py`), API endpoints (`main.py`), and an OpenRouter client (`openrouter_client.py`). The database connection is set up in `database.py`.
+
+**Tasks:**
+
+1.  **Update Database Model (`app/models.py`):**
+    *   **Option A (Simpler):** Add a field to the `Submission` model to store the text of the assignment prompt directly.
+        ```python
+        # Inside class Submission(Base):
+        assignment_prompt_text = Column(Text, nullable=True) # Store the assignment prompt associated with this submission
+        ```
+    *   **Option B (More Structured - Recommended):** Create a new SQLAlchemy model `Assignment` to store assignment prompts. Add a foreign key relationship from `Submission` to `Assignment`.
+        ```python
+        # New Model
+        class Assignment(Base):
+            __tablename__ = "assignments"
+            id = Column(Integer, primary_key=True, index=True)
+            prompt_text = Column(Text, nullable=False)
+            is_current = Column(Boolean, default=False, index=True) # Flag for the currently active assignment
+            created_at = Column(DateTime(timezone=True), server_default=func.now())
+            updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now()) # Ensure default on creation too
+
+        # Modify Submission Model
+        class Submission(Base):
+            __tablename__ = "submissions"
+            # ... other fields ...
+            assignment_id = Column(Integer, ForeignKey("assignments.id"), nullable=True) # Link to the assignment
+            assignment = relationship("Assignment") # Optional: for easier access in code
+
+            # If using Option A, add assignment_prompt_text instead of assignment_id/relationship
+            # assignment_prompt_text = Column(Text, nullable=True)
+        ```
+    *   **Action:** Implement **Option B**. Add the `Assignment` model and modify the `Submission` model in `app/models.py`. Remember to import necessary SQLAlchemy types (`Boolean`, `ForeignKey`, `relationship`).
+
+2.  **Update Pydantic Schemas (`app/schemas.py`):**
+    *   Create schemas for the `Assignment` model: `AssignmentBase`, `AssignmentCreate`, `AssignmentUpdate`, `AssignmentRead`. Include `id`, `prompt_text`, `is_current`, `created_at`, `updated_at` fields as appropriate.
+        ```python
+        # Example Assignment Schemas
+        class AssignmentBase(BaseModel):
+            prompt_text: str = Field(..., description="The text of the assignment question/prompt.")
+            is_current: Optional[bool] = False
+
+        class AssignmentCreate(AssignmentBase):
+            pass
+
+        class AssignmentUpdate(BaseModel): # Allow partial updates
+            prompt_text: Optional[str] = None
+            is_current: Optional[bool] = None
+
+        class AssignmentRead(AssignmentBase):
+            id: int
+            created_at: datetime.datetime
+            updated_at: Optional[datetime.datetime] = None
+
+            class Config:
+                from_attributes = True
+        ```
+    *   Modify `SubmissionCreate` schema: It needs to accept the `assignment_id` when a submission is created.
+        ```python
+        # Modify SubmissionCreate
+        class SubmissionCreate(SubmissionBase): # SubmissionBase likely just has original_content
+            assignment_id: Optional[int] = None # Allow submissions even if no assignment is active/sent
+
+            # If using Option A (direct text storage):
+            # assignment_prompt_text: Optional[str] = None
+        ```
+    *   Modify `Submission` and `SubmissionFullData` response schemas: Include assignment details (either the full related `AssignmentRead` object or just the `assignment_prompt_text`).
+        ```python
+        # Modify Submission schema
+        class Submission(SubmissionBase):
+            id: int
+            # ... other fields like generated_question, student_response ...
+            assignment: Optional[AssignmentRead] = None # Include the full assignment details
+            # Or if using Option A:
+            # assignment_prompt_text: Optional[str] = None
+            created_at: datetime.datetime
+            # ...
+
+            class Config:
+                from_attributes = True
+
+        # SubmissionFullData can likely just inherit from the modified Submission schema
+        class SubmissionFullData(Submission):
+             pass
+        ```
+    *   **Action:** Define the `Assignment` schemas and update the `Submission` schemas in `app/schemas.py`.
+
+3.  **Implement CRUD Operations (`app/crud.py`):**
+    *   Create CRUD functions for the `Assignment` model:
+        *   `create_assignment(db: AsyncSession, assignment: schemas.AssignmentCreate) -> models.Assignment`
+        *   `get_assignment(db: AsyncSession, assignment_id: int) -> models.Assignment | None`
+        *   `get_assignments(db: AsyncSession, skip: int = 0, limit: int = 100) -> list[models.Assignment]`
+        *   `get_current_assignment(db: AsyncSession) -> models.Assignment | None`: Finds the assignment where `is_current` is True.
+        *   `update_assignment(db: AsyncSession, assignment_id: int, assignment_update: schemas.AssignmentUpdate) -> models.Assignment | None`
+        *   `set_current_assignment(db: AsyncSession, assignment_id: int) -> models.Assignment | None`: Sets the specified assignment's `is_current` to True and *all others* to False (ensure only one is current).
+    *   Modify `create_submission(db: AsyncSession, submission: schemas.SubmissionCreate) -> models.Submission`: Update it to accept and store the `assignment_id` (or `assignment_prompt_text` if using Option A) from the `submission` input schema.
+        ```python
+        # Example modification in create_submission
+        db_submission = models.Submission(
+            original_content=submission.original_content,
+            assignment_id=submission.assignment_id # Add this line
+            # Or if using Option A:
+            # assignment_prompt_text=submission.assignment_prompt_text
+        )
+        # ... rest of the function
+        ```
+    *   Modify `get_submission` and `get_all_submissions`: Ensure they load the related assignment data if using relationships (Option B). Use `selectinload` for efficiency if needed, especially in `get_all_submissions`.
+        ```python
+        # Example in get_all_submissions (using Option B)
+        from sqlalchemy.orm import selectinload # Add import
+        # ...
+        result = await db.execute(
+            select(models.Submission)
+            .options(selectinload(models.Submission.assignment)) # Eager load assignment data
+            .order_by(desc(models.Submission.created_at))
+            .offset(skip)
+            .limit(limit)
+        )
+        # ...
+        ```
+    *   **Action:** Implement the new `Assignment` CRUD functions and modify the `Submission` CRUD functions in `app/crud.py`.
+
+4.  **Create API Endpoints (`app/main.py`):**
+    *   Add endpoints for Assignment management (likely used by the teacher dashboard):
+        *   `POST /api/assignments` (Create a new assignment, responds with `AssignmentRead`)
+        *   `GET /api/assignments` (List all assignments, responds with `List[AssignmentRead]`)
+        *   `GET /api/assignments/current` (Get the currently active assignment, responds with `AssignmentRead` or 404)
+        *   `PUT /api/assignments/{assignment_id}` (Update an assignment, e.g., its text, responds with `AssignmentRead`)
+        *   `PUT /api/assignments/{assignment_id}/set-current` (Set an assignment as the current one, responds with `AssignmentRead`) - *This is often better than putting `is_current` in the general PUT.*
+    *   Modify `POST /api/submit-assignment`: Ensure it accepts the updated `SubmissionCreate` schema (including `assignment_id` or `assignment_prompt_text`). Pass this data to `crud.create_submission`.
+    *   Modify `POST /api/generate-question`:
+        *   Fetch the `db_submission` using `crud.get_submission`.
+        *   Retrieve the associated assignment prompt:
+            *   If using Option B: `assignment_prompt = db_submission.assignment.prompt_text if db_submission.assignment else "No specific assignment prompt provided."`
+            *   If using Option A: `assignment_prompt = db_submission.assignment_prompt_text or "No specific assignment prompt provided."`
+        *   Retrieve the student's response: `student_response = db_submission.original_content` (assuming `original_content` *is* the student's response to the assignment).
+        *   Pass *both* `assignment_prompt` and `student_response` to `openrouter_client.generate_follow_up_question`.
+    *   **Action:** Add the new Assignment endpoints and modify the `/api/submit-assignment` and `/api/generate-question` endpoints in `app/main.py`.
+
+5.  **Update OpenRouter Client (`app/openrouter_client.py`):**
+    *   Modify the `generate_follow_up_question` function signature to accept both the assignment prompt and the student's response.
+        ```python
+        async def generate_follow_up_question(assignment_prompt: str, student_response: str, system_prompt: str) -> str:
+            # ... (keep existing API key check, headers etc.)
+        ```
+    *   Update the payload (`messages` array) sent to the OpenRouter API to include *both* pieces of information, clearly labeled.
+        ```python
+        # Example Payload Modification
+        payload = {
+            "model": FREE_MODEL, # Or your preferred model
+            "messages": [
+                {"role": "system", "content": system_prompt}, # System prompt remains
+                # New combined user message:
+                {"role": "user", "content": f"Assignment Question:\n```\n{assignment_prompt}\n```\n\nStudent's Response:\n```\n{student_response}\n```\n\nGenerate a concise follow-up question based on the student's response in the context of the assignment question:"}
+            ],
+            "max_tokens": 70,
+            "temperature": 0.7
+        }
+        ```
+    *   Consider updating the `DEFAULT_SYSTEM_PROMPT` in `app/models.py` (or instruct the teacher via the dashboard) to reflect that the input now contains both the assignment and the response. Example:
+        ```python
+        DEFAULT_SYSTEM_PROMPT = ("You are an AI assistant helping to verify student understanding. "
+                                 "You will receive the original assignment question and the student's response to it. "
+                                 "Based on BOTH the question and the response, generate ONE concise follow-up question "
+                                 "that probes the student's understanding of their response *in relation to the assignment*, or asks for clarification on a specific aspect connecting the two. "
+                                 "The follow-up question should be answerable in 60-90 seconds.")
+        ```
+    *   **Action:** Modify the `generate_follow_up_question` function signature and payload in `app/openrouter_client.py`. Update the `DEFAULT_SYSTEM_PROMPT` in `app/models.py`.
+
+6.  **Database Migration:**
+    *   If you were using Alembic, you would generate a new migration script (`alembic revision --autogenerate -m "Add Assignment model and link to Submission"`) and apply it (`alembic upgrade head`). Since Alembic isn't set up, the `await init_db()` in `main.py`'s startup event *should* create the new table and add the column *if the table/column doesn't exist*. **Caution:** This won't handle modifications to existing columns well. For development/demo, dropping and recreating might be acceptable IF YOU DON'T NEED EXISTING DATA. Otherwise, manual SQL might be needed, or setting up Alembic is the robust solution.
+    *   **Action:** Ensure `await init_db()` is called on startup. Be aware of its limitations for modifying existing structures.
+
+**Testing:** After these changes, deploy the backend. Use `/docs` to test:
+    *   Creating assignments.
+    *   Setting one as current.
+    *   Getting the current assignment.
+    *   Submitting a student response (providing the `assignment_id` of the current assignment).
+    *   Generating a question for that submission (verify it gets the context).
+    *   Viewing the submission details (check if assignment info is included).
+
+## Implementation Notes
+
+The backend implementation for the Assignment Prompt Integration feature has been completed according to the guidelines above. Here's what was implemented:
+
+1. **Database Model (`app/models.py`):** 
+   - Created new `Assignment` model with `prompt_text`, `is_current`, and timestamp fields
+   - Added `assignment_id` foreign key and relationship to `Submission` model
+   - Updated the `DEFAULT_SYSTEM_PROMPT` to handle both assignment questions and student responses
+
+2. **Pydantic Schemas (`app/schemas.py`):
+   - Added `AssignmentBase`, `AssignmentCreate`, `AssignmentUpdate`, and `AssignmentRead` schemas
+   - Updated `SubmissionCreate` to include optional `assignment_id`
+   - Modified `Submission` and `SubmissionFullData` schemas to include assignment information
+
+3. **CRUD Operations (`app/crud.py`):
+   - Implemented CRUD functions for the `Assignment` model including special handling for `is_current`
+   - Updated the submission CRUD functions to store and load assignment data
+   - Added proper relationship loading with `selectinload`
+
+4. **API Endpoints (`app/main.py`):
+   - Added endpoints for assignment management (create, list, get current, update, set-current)
+   - Modified `/api/submit-assignment` to handle assignment IDs and automatically use current assignment
+   - Updated `/api/generate-question` to get both assignment prompt and student response
+
+5. **OpenRouter Client (`app/openrouter_client.py`):
+   - Modified `generate_follow_up_question` to accept assignment prompt and student response
+   - Updated the payload format to include both pieces of information clearly labeled
+
+The backend now supports creating and managing assignments, associating submissions with assignments, and using both the assignment prompt and student response for generating follow-up questions.
+
+Next steps will be to implement the frontend changes to support these new features.
